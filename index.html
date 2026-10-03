@@ -38,6 +38,7 @@ const firebaseConfig = {
 
 const GAMES=["Mario","Luigi","Link","Zelda","Ganondorf","Samus Aran","Kirby","Pikachu","Donkey Kong","Bowser","Princess Peach","Sonic","Tails","Dr. Eggman","Master Chief","Kratos","Lara Croft","Geralt of Rivia","Ezio Auditore","Solid Snake","Cloud Strife","Sephiroth","Crash Bandicoot","Spyro","Mega Man","Pac-Man","Ryu","Chun-Li","Scorpion","Sub-Zero","Steve (Minecraft)","Creeper","Isabelle","Tom Nook","Fox McCloud","Captain Falcon","Yoshi","Wario","Ness","Mewtwo","Gordon Freeman","GLaDOS","Chell","Joel (Last of Us)","Ellie","Nathan Drake","Arthur Morgan","Dovahkiin","Doomguy","Pyramid Head","Shepard","Cuphead","Sans","The Knight (Hollow Knight)","Toad","Tracer","Jill Valentine","Leon Kennedy","Aloy","Alucard"];
 const MOVIES=["Darth Vader","Luke Skywalker","Yoda","Han Solo","Princess Leia","Harry Potter","Hermione Granger","Voldemort","Gandalf","Frodo","Gollum","Iron Man","Captain America","Thor","Hulk","Black Widow","Spider-Man","Batman","The Joker","Superman","Wonder Woman","Shrek","Donkey (Shrek)","Woody","Buzz Lightyear","Elsa","Simba","Scar","Nemo","Dory","Jack Sparrow","Indiana Jones","Forrest Gump","Rocky Balboa","Terminator","John Wick","Neo","Hannibal Lecter","E.T.","Marty McFly","Doc Brown","Ferris Bueller","Ace Ventura","Maximus","Mr. Incredible","Wall-E","Groot","Rocket Raccoon","Thanos","Deadpool","Wolverine","Dracula","Ghostface","Michael Myers","Mad Max","Optimus Prime","Marlin","Minion","Barbie","Ken"];
+const HISTORY=["Cleopatra","Julius Caesar","Alexander the Great","Napoleon Bonaparte","Abraham Lincoln","George Washington","Winston Churchill","Albert Einstein","Isaac Newton","Leonardo da Vinci","William Shakespeare","Joan of Arc","Genghis Khan","Queen Elizabeth I","Henry VIII","Marie Antoinette","Martin Luther King Jr.","Mahatma Gandhi","Nelson Mandela","Rosa Parks","Harriet Tubman","Amelia Earhart","Neil Armstrong","Marie Curie","Nikola Tesla","Thomas Edison","Benjamin Franklin","Christopher Columbus","Marco Polo","Charles Darwin","Galileo Galilei","Vincent van Gogh","Pablo Picasso","Mozart","Beethoven","Frida Kahlo","Muhammad Ali","Babe Ruth","Mother Teresa","Anne Frank","Sitting Bull","Pocahontas","Teddy Roosevelt","Brutus","Ramses II","Tutankhamun","Howard Carter","Attila the Hun","Blackbeard","Tsar Nicholas II","Catherine the Great","Confucius","Socrates","Plato","Aristotle","Hippocrates","Florence Nightingale","Orville Wright","Steve Jobs","Walt Disney"];
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const idOf=n=>n.toLowerCase().replace(/[^a-z0-9]+/g,'_').slice(0,16)||'p';
@@ -89,7 +90,7 @@ function stepper(label,key,min,max){
   return `<div class="row" style="margin-bottom:8px"><span>${label}</span><span class="step"><button class="s" onclick="adj('${key}',-1,${min},${max})">−</button><b>${L[key]}</b><button class="s" onclick="adj('${key}',1,${min},${max})">+</button></span></div>`;
 }
 function adj(k,d,mn,mx){upd({[k]:Math.max(mn,Math.min(mx,L[k]+d))})}
-function pool(){return L.pool==='games'?GAMES:L.pool==='movies'?MOVIES:GAMES.concat(MOVIES)}
+function pool(){return L.pool==='games'?GAMES:L.pool==='movies'?MOVIES:L.pool==='history'?HISTORY:GAMES.concat(MOVIES,HISTORY)}
 
 async function startRound(re){
   const src=pool().slice(),assign={};
@@ -143,9 +144,9 @@ function render(){
   }
   html+=`<h2>Scoreboard</h2><div class="card">`+sorted.map(p=>`<div class="row" style="padding:6px 0"><span>${p.id===L.host?'👑 ':''}${esc(p.name)}${p.id===me.id?' (you)':''} <span class="mu">🏅${(W[p.id]||{}).wins||0} wins</span></span><span class="sc">${p.score||0}</span></div>`).join('')+`</div>`;
   if(h&&(st==='lobby'||st==='between')){
-    html+=`<h2>Game settings</h2><div class="card"><select onchange="upd({pool:this.value})">${[['both','Video games + movies'],['games','Video games only'],['movies','Movies only']].map(o=>`<option value="${o[0]}" ${L.pool===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select>${stepper('Max rounds','maxRounds',1,30)}${stepper('Score to win','winScore',1,15)}</div>`;
+    html+=`<h2>Game settings</h2><div class="card"><select onchange="upd({pool:this.value})">${[['both','All categories'],['games','Video games only'],['movies','Movies only'],['history','Historical figures only']].map(o=>`<option value="${o[0]}" ${L.pool===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select>${stepper('Max rounds','maxRounds',1,30)}${stepper('Score to win','winScore',1,15)}</div>`;
   }else if(st==='lobby'||st==='between'){
-    html+=`<p class="mu">Pool: ${L.pool==='both'?'games + movies':L.pool} · Waiting for the host…</p>`;
+    html+=`<p class="mu">Pool: ${L.pool==='both'?'all categories':L.pool} · Waiting for the host…</p>`;
   }
   if(h){
     if(st==='lobby'||st==='between')html+=`<button style="width:100%" ${P.length<2?'disabled':''} onclick="startRound()">${st==='lobby'?'Start game':'Next round'}</button>${P.length<2?'<p class="mu">Need at least 2 players.</p>':''}`;
