@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Who Am I? Party Game</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f6f4ff;--card:#fff;--tx:#1d1b2e;--mu:#6b6885;--ac:#6c4cf5;--ok:#1fa971;--bd:#e3dff5}
+@media (prefers-color-scheme:dark){:root{--bg:#14121f;--card:#201d33;--tx:#f1eefc;--mu:#a29fc0;--ac:#9a82ff;--ok:#3fd49a;--bd:#33304d}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:520px;margin:0 auto;padding:16px}
+h1{font-size:26px;margin:8px 0 2px}h2{font-size:15px;color:var(--mu);margin:18px 0 8px;text-transform:uppercase;letter-spacing:.05em}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px;margin-bottom:10px}
+input,select{width:100%;font:inherit;padding:12px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);margin-bottom:8px}
+button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:12px 16px;background:var(--ac);color:#fff;cursor:pointer;min-height:44px}
+button.s{background:var(--bd);color:var(--tx)}button.ok{background:var(--ok);color:#fff}button:disabled{opacity:.45}
+.row{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.code{font-size:34px;font-weight:800;letter-spacing:.2em;color:var(--ac)}
+.mu{color:var(--mu);font-size:14px}.big{font-size:22px;font-weight:700}
+.step{display:flex;align-items:center;gap:10px}.step button{padding:6px 14px;min-height:40px}
+.err{color:#d6336c;min-height:20px}
+.hid{font-size:28px;letter-spacing:.2em;color:var(--mu)}
+.sc{font-weight:800;font-size:20px}
+</style></head><body><main id="app"><p class="mu">Loading…</p></main>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script>
+// ====== PASTE YOUR FIREBASE CONFIG HERE (see setup steps) ======
+const firebaseConfig = {
+  apiKey: "AIzaSyAt1NQGnl8pPXH1jP5zx4XkeGP4qZtu-50",
+  authDomain: "party-game-71184.firebaseapp.com",
+  databaseURL: "https://party-game-71184-default-rtdb.firebaseio.com",
+  projectId: "party-game-71184",
+  storageBucket: "party-game-71184.firebasestorage.app",
+  messagingSenderId: "710604968683",
+  appId: "1:710604968683:web:56a5294b38be10bcd064ae"
+};
+// ================================================================
+
+const GAMES=["Mario","Luigi","Link","Zelda","Ganondorf","Samus Aran","Kirby","Pikachu","Donkey Kong","Bowser","Princess Peach","Sonic","Tails","Dr. Eggman","Master Chief","Kratos","Lara Croft","Geralt of Rivia","Ezio Auditore","Solid Snake","Cloud Strife","Sephiroth","Crash Bandicoot","Spyro","Mega Man","Pac-Man","Ryu","Chun-Li","Scorpion","Sub-Zero","Steve (Minecraft)","Creeper","Isabelle","Tom Nook","Fox McCloud","Captain Falcon","Yoshi","Wario","Ness","Mewtwo","Gordon Freeman","GLaDOS","Chell","Joel (Last of Us)","Ellie","Nathan Drake","Arthur Morgan","Dovahkiin","Doomguy","Pyramid Head","Shepard","Cuphead","Sans","The Knight (Hollow Knight)","Toad","Tracer","Jill Valentine","Leon Kennedy","Aloy","Alucard"];
+const MOVIES=["Darth Vader","Luke Skywalker","Yoda","Han Solo","Princess Leia","Harry Potter","Hermione Granger","Voldemort","Gandalf","Frodo","Gollum","Iron Man","Captain America","Thor","Hulk","Black Widow","Spider-Man","Batman","The Joker","Superman","Wonder Woman","Shrek","Donkey (Shrek)","Woody","Buzz Lightyear","Elsa","Simba","Scar","Nemo","Dory","Jack Sparrow","Indiana Jones","Forrest Gump","Rocky Balboa","Terminator","John Wick","Neo","Hannibal Lecter","E.T.","Marty McFly","Doc Brown","Ferris Bueller","Ace Ventura","Maximus","Mr. Incredible","Wall-E","Groot","Rocket Raccoon","Thanos","Deadpool","Wolverine","Dracula","Ghostface","Michael Myers","Mad Max","Optimus Prime","Marlin","Minion","Barbie","Ken"];
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const idOf=n=>n.toLowerCase().replace(/[^a-z0-9]+/g,'_').slice(0,16)||'p';
+const sget=k=>{try{return localStorage.getItem(k)||''}catch(e){return ''}};
+const sset=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
+const pick=a=>a[Math.floor(Math.random()*a.length)];
+let rdb,me=null,code=null,L=null,P=[],W={},offs=[],err='';
+const inc=n=>firebase.database.ServerValue.increment(n);
+const lref=()=>rdb.ref('lobbies/'+code);
+const isHost=()=>L&&me&&L.host===me.id;
+
+if(firebaseConfig.apiKey==='YOUR_API_KEY'){
+  $('#app').innerHTML='<h1>🎭 Who Am I?</h1><p class="err">Firebase isn\'t set up yet. Paste your Firebase config into the top of this file (see the setup steps).</p>';
+}else{
+  firebase.initializeApp(firebaseConfig);rdb=firebase.database();
+  const c=sget('wai_code'),n=sget('wai_name');
+  if(c&&n){me={name:n,id:idOf(n)};code=c;join().catch(()=>{code=null}).then(render)}else render();
+}
+
+async function enter(create){
+  const name=$('#nm').value.trim().replace(/[^\w \-]/g,'').slice(0,16);
+  if(!name){err='Enter a username';return render()}
+  me={name,id:idOf(name)};
+  code=create?Array.from({length:4},()=>pick('ABCDEFGHJKLMNPQRSTUVWXYZ')).join(''):$('#cd').value.trim().toUpperCase();
+  try{
+    if(create)await lref().update({host:me.id,pool:'both',maxRounds:5,winScore:3,round:0,status:'lobby'});
+    else if(!(await lref().child('host').get()).exists()){code=null;err='Lobby not found';return render()}
+    await join();err='';
+  }catch(e){code=null;err='Could not connect: '+(e.message||e)}
+  render();
+}
+async function join(){
+  const pr=lref().child('players/'+me.id);
+  if(!(await pr.get()).exists())await pr.set({id:me.id,name:me.name,score:0});
+  sset('wai_code',code);sset('wai_name',me.name);
+  offs.forEach(f=>f());
+  const r1=lref(),f1=r1.on('value',s=>{
+    const v=s.val();
+    if(!v){L=null}else{L={...v,assign:v.assign||{},done:v.done||{}};P=Object.values(v.players||{})}
+    render();
+  });
+  const r2=rdb.ref('profiles'),f2=r2.on('value',s=>{W=s.val()||{};render()});
+  offs=[()=>r1.off('value',f1),()=>r2.off('value',f2)];
+}
+function leave(){offs.forEach(f=>f());offs=[];sset('wai_code','');code=null;L=null;P=[];render()}
+
+const upd=o=>lref().update(o);
+function stepper(label,key,min,max){
+  return `<div class="row" style="margin-bottom:8px"><span>${label}</span><span class="step"><button class="s" onclick="adj('${key}',-1,${min},${max})">−</button><b>${L[key]}</b><button class="s" onclick="adj('${key}',1,${min},${max})">+</button></span></div>`;
+}
+function adj(k,d,mn,mx){upd({[k]:Math.max(mn,Math.min(mx,L[k]+d))})}
+function pool(){return L.pool==='games'?GAMES:L.pool==='movies'?MOVIES:GAMES.concat(MOVIES)}
+
+async function startRound(re){
+  const src=pool().slice(),assign={};
+  P.forEach(p=>{assign[p.id]=src.splice(Math.floor(Math.random()*src.length),1)[0]});
+  await upd({status:'playing',round:re===true?L.round:L.round+1,assign,done:null});
+}
+async function award(id){
+  if(L.done[id])return;
+  await upd({['players/'+id+'/score']:inc(1),['done/'+id]:true});
+}
+async function endRound(){
+  const top=Math.max(0,...P.map(p=>p.score||0));
+  const over=top>=L.winScore||L.round>=L.maxRounds;
+  await upd({status:over?'over':'between'});
+  if(over)for(const p of P){
+    const pr=rdb.ref('profiles/'+p.id);
+    await pr.update({id:p.id,games:inc(1),wins:inc((p.score||0)===top&&top>0?1:0)});
+  }
+}
+async function reset(){
+  const u={status:'lobby',round:0,assign:null,done:null};
+  P.forEach(p=>{u['players/'+p.id+'/score']=0});
+  await upd(u);
+}
+function copyLink(){const t=`Join my Who Am I game! Lobby code: ${code}\n${location.href.split('#')[0]}`;navigator.clipboard&&navigator.clipboard.writeText(t).then(()=>alert('Invite copied!')).catch(()=>alert(t))}
+
+function render(){
+  const a=$('#app');if(!rdb)return;
+  if(!code||!L){
+    a.innerHTML=`<h1>🎭 Who Am I?</h1><p class="mu">Everyone sees your character but you. Ask yes/no questions on voice chat to figure it out!</p>
+    <div class="card"><input id="nm" placeholder="Your username" maxlength="16" value="${esc(sget('wai_name'))}">
+    <button style="width:100%;margin-bottom:12px" onclick="enter(true)">Create lobby</button>
+    <div class="mu" style="margin-bottom:6px">or join a friend's lobby</div>
+    <input id="cd" placeholder="Lobby code" maxlength="4" style="text-transform:uppercase">
+    <button class="s" style="width:100%" onclick="enter(false)">Join lobby</button></div><div class="err">${esc(err)}</div>`;
+    return;
+  }
+  const h=isHost(),st=L.status,sorted=P.slice().sort((x,y)=>(y.score||0)-(x.score||0));
+  let html=`<div class="row"><div><div class="mu">Lobby code · Round ${L.round}/${L.maxRounds} · First to ${L.winScore}</div><div class="code">${esc(code)}</div></div><div><button class="s" onclick="copyLink()">Invite</button></div></div>`;
+  if(st==='over'){
+    const top=sorted[0]?sorted[0].score||0:0,ws=sorted.filter(p=>(p.score||0)===top).map(p=>esc(p.name)).join(' & ');
+    html+=`<div class="card" style="text-align:center"><div style="font-size:48px">🏆</div><div class="big">${ws} wins!</div></div>`;
+  }
+  if(st==='playing'||st==='between'||st==='over'){
+    html+=`<h2>${st==='playing'?'Round '+L.round+' · guess who you are':'Round '+L.round+' reveal'}</h2>`;
+    P.forEach(p=>{
+      const mine=p.id===me.id,show=!mine||st!=='playing',d=L.done[p.id];
+      html+=`<div class="card row"><div><div class="mu">${esc(p.name)}${mine?' (you)':''}</div>${show?`<div class="big">${esc(L.assign[p.id]||'—')}</div>`:'<div class="hid">? ? ?</div>'}</div>
+      ${d?'<span style="color:var(--ok);font-weight:700">✓ Guessed</span>':(h&&st==='playing'?`<button class="ok" onclick="award('${p.id}')">Got it +1</button>`:'')}</div>`;
+    });
+  }
+  html+=`<h2>Scoreboard</h2><div class="card">`+sorted.map(p=>`<div class="row" style="padding:6px 0"><span>${p.id===L.host?'👑 ':''}${esc(p.name)}${p.id===me.id?' (you)':''} <span class="mu">🏅${(W[p.id]||{}).wins||0} wins</span></span><span class="sc">${p.score||0}</span></div>`).join('')+`</div>`;
+  if(h&&(st==='lobby'||st==='between')){
+    html+=`<h2>Game settings</h2><div class="card"><select onchange="upd({pool:this.value})">${[['both','Video games + movies'],['games','Video games only'],['movies','Movies only']].map(o=>`<option value="${o[0]}" ${L.pool===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select>${stepper('Max rounds','maxRounds',1,30)}${stepper('Score to win','winScore',1,15)}</div>`;
+  }else if(st==='lobby'||st==='between'){
+    html+=`<p class="mu">Pool: ${L.pool==='both'?'games + movies':L.pool} · Waiting for the host…</p>`;
+  }
+  if(h){
+    if(st==='lobby'||st==='between')html+=`<button style="width:100%" ${P.length<2?'disabled':''} onclick="startRound()">${st==='lobby'?'Start game':'Next round'}</button>${P.length<2?'<p class="mu">Need at least 2 players.</p>':''}`;
+    if(st==='playing')html+=`<button class="s" style="width:100%;margin-bottom:8px" onclick="startRound(true)">Reroll characters</button><button style="width:100%" onclick="endRound()">End round &amp; reveal</button>`;
+    if(st==='over')html+=`<button style="width:100%" onclick="reset()">Play again</button>`;
+    if(st!=='lobby'&&st!=='over')html+=`<button class="s" style="width:100%;margin-top:8px" onclick="if(confirm('End the whole game?')){L.round=L.maxRounds;endRound()}">End game now</button>`;
+  }else html+=`<button class="s" style="width:100%" onclick="upd({host:'${me.id}'})">Take over as host</button>`;
+  html+=`<button class="s" style="width:100%;margin-top:8px" onclick="leave()">Leave lobby</button>`;
+  a.innerHTML=html;
+}
+</script></body></html>
