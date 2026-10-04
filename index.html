@@ -111,11 +111,21 @@ const poolSel=()=>`<div class="mu" style="margin-bottom:6px">Categories (tap to 
 const poolName=()=>CATS.filter(c=>sel().includes(c[0])).map(c=>c[1].replace(/^\S+ /,'')).join(', ');
 function pool(){const l=LISTS();return [...new Set(sel().flatMap(k=>l[k]))]}
 
+const usedList=()=>Array.isArray(L.used)?L.used:Object.values(L.used||{});
 async function startRound(re){
   if(re!==true&&L.round>=L.maxRounds)return endRound();
-  let src=pool(),assign={};
-  P.forEach(p=>{if(!src.length)src=pool();assign[p.id]=src.splice(Math.floor(Math.random()*src.length),1)[0]});
-  await upd({status:'playing',round:re===true?L.round:L.round+1,assign,done:null});
+  // "used" only holds characters from rounds actually played, so rerolling an unfinished round doesn't burn them.
+  let used=usedList();
+  const done=re===true?(L.done||{}):{},assign={},cur=Object.values(L.assign||{});
+  const keep=P.filter(p=>done[p.id]&&L.assign[p.id]); // players who already scored keep their character
+  keep.forEach(p=>{assign[p.id]=L.assign[p.id]});
+  used=[...new Set(used.concat(keep.map(p=>assign[p.id])))];
+  const todo=P.filter(p=>!assign[p.id]),all=pool(),skip=new Set(used);
+  let src=all.filter(x=>!skip.has(x)&&!Object.values(assign).includes(x));
+  if(re===true){const fresh=src.filter(x=>!cur.includes(x));if(fresh.length>=todo.length)src=fresh} // don't hand the same ones straight back
+  if(src.length<todo.length){used=keep.map(p=>assign[p.id]);src=all.filter(x=>!used.includes(x))}
+  todo.forEach(p=>{assign[p.id]=src.splice(Math.floor(Math.random()*src.length),1)[0]});
+  await upd({status:'playing',round:re===true?L.round:L.round+1,assign,done:re===true?L.done||null:null,used});
 }
 async function award(id){
   if(L.done[id])return;
@@ -125,7 +135,7 @@ async function endRound(){
   if(L.status==='over')return;
   const top=Math.max(0,...P.map(p=>p.score||0));
   const over=top>=L.winScore||L.round>=L.maxRounds;
-  await upd({status:over?'over':'between'});
+  await upd({status:over?'over':'between',used:[...new Set(usedList().concat(Object.values(L.assign||{})))]});
   if(over)for(const p of P){
     const pr=rdb.ref('profiles/'+p.id);
     await pr.update({id:p.id,games:inc(1),wins:inc((p.score||0)===top&&top>0?1:0)});
