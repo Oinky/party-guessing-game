@@ -92,6 +92,8 @@ function stepper(label,key,min,max){
   return `<div class="row" style="margin-bottom:8px"><span>${label}</span><span class="step"><button class="s" onclick="adj('${key}',-1,${min},${max})">−</button><b>${L[key]}</b><button class="s" onclick="adj('${key}',1,${min},${max})">+</button></span></div>`;
 }
 function adj(k,d,mn,mx){upd({[k]:Math.max(mn,Math.min(mx,L[k]+d))})}
+const POOLS=[['both','All categories'],['games','Video games only'],['movies','Movies only'],['history','Historical figures only'],['anime','Anime only'],['pop','Pop culture people only']];
+const poolSel=()=>`<select onchange="upd({pool:this.value})">${POOLS.map(o=>`<option value="${o[0]}" ${L.pool===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select>`;
 function pool(){return L.pool==='games'?GAMES:L.pool==='movies'?MOVIES:L.pool==='history'?HISTORY:L.pool==='anime'?ANIME:L.pool==='pop'?POP:[...new Set(GAMES.concat(MOVIES,HISTORY,ANIME,POP))]}
 
 async function startRound(re){
@@ -146,13 +148,13 @@ function render(){
   }
   html+=`<h2>Scoreboard</h2><div class="card">`+sorted.map(p=>`<div class="row" style="padding:6px 0"><span>${p.id===L.host?'👑 ':''}${esc(p.name)}${p.id===me.id?' (you)':''} <span class="mu">🏅${(W[p.id]||{}).wins||0} wins</span></span><span class="sc">${p.score||0}</span></div>`).join('')+`</div>`;
   if(h&&(st==='lobby'||st==='between')){
-    html+=`<h2>Game settings</h2><div class="card"><select onchange="upd({pool:this.value})">${[['both','All categories'],['games','Video games only'],['movies','Movies only'],['history','Historical figures only'],['anime','Anime only'],['pop','Pop culture people only']].map(o=>`<option value="${o[0]}" ${L.pool===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select>${stepper('Max rounds','maxRounds',1,30)}${stepper('Score to win','winScore',1,15)}</div>`;
+    html+=`<h2>Game settings</h2><div class="card">${poolSel()}${stepper('Max rounds','maxRounds',1,30)}${stepper('Score to win','winScore',1,15)}</div>`;
   }else if(st==='lobby'||st==='between'){
     html+=`<p class="mu">Pool: ${L.pool==='both'?'all categories':L.pool} · Waiting for the host…</p>`;
   }
   if(h){
     if(st==='lobby'||st==='between')html+=`<button style="width:100%" ${P.length<2?'disabled':''} onclick="startRound()">${st==='lobby'?'Start game':'Next round'}</button>${P.length<2?'<p class="mu">Need at least 2 players.</p>':''}`;
-    if(st==='playing')html+=`<button class="s" style="width:100%;margin-bottom:8px" onclick="startRound(true)">Reroll characters</button><button style="width:100%" onclick="endRound()">End round &amp; reveal</button>`;
+    if(st==='playing')html+=`<h2>Reroll</h2><div class="card"><div class="mu" style="margin-bottom:6px">Category for the reroll</div>${poolSel()}<button class="s" style="width:100%" onclick="startRound(true)">Reroll characters</button></div><button style="width:100%" onclick="endRound()">End round &amp; reveal</button>`;
     if(st==='over')html+=`<button style="width:100%" onclick="reset()">Play again</button>`;
     if(st!=='lobby'&&st!=='over')html+=`<button class="s" style="width:100%;margin-top:8px" onclick="if(confirm('End the whole game?')){L.round=L.maxRounds;endRound()}">End game now</button>`;
   }else html+=`<button class="s" style="width:100%" onclick="upd({host:'${me.id}'})">Take over as host</button>`;
