@@ -66,7 +66,7 @@ async function enter(create){
   me={name,id:idOf(name)};
   code=create?Array.from({length:4},()=>pick('ABCDEFGHJKLMNPQRSTUVWXYZ')).join(''):$('#cd').value.trim().toUpperCase();
   try{
-    if(create)await lref().update({host:me.id,pool:'both',maxRounds:5,winScore:3,round:0,status:'lobby'});
+    if(create)await lref().update({host:me.id,pool:'games,movies,history,anime,pop',maxRounds:5,winScore:3,round:0,status:'lobby'});
     else if(!(await lref().child('host').get()).exists()){code=null;err='Lobby not found';return render()}
     await join();err='';
   }catch(e){code=null;err='Could not connect: '+(e.message||e)}
@@ -92,9 +92,17 @@ function stepper(label,key,min,max){
   return `<div class="row" style="margin-bottom:8px"><span>${label}</span><span class="step"><button class="s" onclick="adj('${key}',-1,${min},${max})">−</button><b>${L[key]}</b><button class="s" onclick="adj('${key}',1,${min},${max})">+</button></span></div>`;
 }
 function adj(k,d,mn,mx){upd({[k]:Math.max(mn,Math.min(mx,L[k]+d))})}
-const POOLS=[['both','All categories'],['games','Video games only'],['movies','Movies only'],['history','Historical figures only'],['anime','Anime only'],['pop','Pop culture people only']];
-const poolSel=()=>`<select onchange="upd({pool:this.value})">${POOLS.map(o=>`<option value="${o[0]}" ${L.pool===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select>`;
-function pool(){return L.pool==='games'?GAMES:L.pool==='movies'?MOVIES:L.pool==='history'?HISTORY:L.pool==='anime'?ANIME:L.pool==='pop'?POP:[...new Set(GAMES.concat(MOVIES,HISTORY,ANIME,POP))]}
+const CATS=[['games','🎮 Video games'],['movies','🎬 Movies'],['history','🏛️ History'],['anime','🍥 Anime'],['pop','⭐ Pop culture']];
+const LISTS=()=>({games:GAMES,movies:MOVIES,history:HISTORY,anime:ANIME,pop:POP});
+const sel=()=>!L.pool||L.pool==='both'?CATS.map(c=>c[0]):L.pool.split(',').filter(k=>LISTS()[k]);
+function toggleCat(k){
+  const cur=sel(),next=cur.includes(k)?cur.filter(x=>x!==k):cur.concat(k);
+  if(!next.length)return;
+  upd({pool:CATS.map(c=>c[0]).filter(x=>next.includes(x)).join(',')});
+}
+const poolSel=()=>`<div class="mu" style="margin-bottom:6px">Categories (tap to turn on/off)</div><div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${CATS.map(c=>`<button class="${sel().includes(c[0])?'':'s'}" style="padding:8px 12px;min-height:40px" onclick="toggleCat('${c[0]}')">${sel().includes(c[0])?'✓ ':''}${c[1]}</button>`).join('')}</div>`;
+const poolName=()=>CATS.filter(c=>sel().includes(c[0])).map(c=>c[1].replace(/^\S+ /,'')).join(', ');
+function pool(){const l=LISTS();return [...new Set(sel().flatMap(k=>l[k]))]}
 
 async function startRound(re){
   const src=pool().slice(),assign={};
@@ -150,11 +158,11 @@ function render(){
   if(h&&(st==='lobby'||st==='between')){
     html+=`<h2>Game settings</h2><div class="card">${poolSel()}${stepper('Max rounds','maxRounds',1,30)}${stepper('Score to win','winScore',1,15)}</div>`;
   }else if(st==='lobby'||st==='between'){
-    html+=`<p class="mu">Pool: ${L.pool==='both'?'all categories':L.pool} · Waiting for the host…</p>`;
+    html+=`<p class="mu">Categories: ${poolName()} · Waiting for the host…</p>`;
   }
   if(h){
     if(st==='lobby'||st==='between')html+=`<button style="width:100%" ${P.length<2?'disabled':''} onclick="startRound()">${st==='lobby'?'Start game':'Next round'}</button>${P.length<2?'<p class="mu">Need at least 2 players.</p>':''}`;
-    if(st==='playing')html+=`<h2>Reroll</h2><div class="card"><div class="mu" style="margin-bottom:6px">Category for the reroll</div>${poolSel()}<button class="s" style="width:100%" onclick="startRound(true)">Reroll characters</button></div><button style="width:100%" onclick="endRound()">End round &amp; reveal</button>`;
+    if(st==='playing')html+=`<h2>Reroll</h2><div class="card">${poolSel()}<button class="s" style="width:100%" onclick="startRound(true)">Reroll characters</button></div><button style="width:100%" onclick="endRound()">End round &amp; reveal</button>`;
     if(st==='over')html+=`<button style="width:100%" onclick="reset()">Play again</button>`;
     if(st!=='lobby'&&st!=='over')html+=`<button class="s" style="width:100%;margin-top:8px" onclick="if(confirm('End the whole game?')){L.round=L.maxRounds;endRound()}">End game now</button>`;
   }else html+=`<button class="s" style="width:100%" onclick="upd({host:'${me.id}'})">Take over as host</button>`;
