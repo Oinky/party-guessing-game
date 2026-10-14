@@ -51,10 +51,23 @@ const idOf=n=>n.trim().toLowerCase().replace(/[.$#\[\]\/\s]+/g,'_').slice(0,24)|
 const sget=k=>{try{return localStorage.getItem(k)||''}catch(e){return ''}};
 const sset=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
 const pick=a=>a[Math.floor(Math.random()*a.length)];
-let rdb,me=null,code=null,L=null,P=[],W={},offs=[],err='';
+// Short stable fingerprint of a character name, so the "used" list stays small
+const hash=s=>{let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return (h>>>0).toString(36)};
+let rdb,me=null,code=null,L=null,P=[],W={},offs=[],pw={},err='',online=true,toast='',wl=null,rq=0;
+const busy=new Set(),draft={nm:sget('wai_name'),cd:''};
+const TS=()=>firebase.database.ServerValue.TIMESTAMP;
 const inc=n=>firebase.database.ServerValue.increment(n);
 const lref=()=>rdb.ref('lobbies/'+code);
-const isHost=()=>L&&me&&L.host===me.id;
+const isHost=()=>!!(L&&me&&L.host===me.id);
+const ALL_CATS='games,movies,history,anime,pop,tv,books,sports,lol';
+const newCode=()=>Array.from({length:4},()=>pick('ABCDEFGHJKLMNPQRSTUVWXYZ')).join('');
+
+function flash(m){toast=m;render();setTimeout(()=>{if(toast===m){toast='';render()}},4000)}
+async function run(f){
+  try{await f()}catch(e){flash(e&&e.code==='PERMISSION_DENIED'?'Blocked by the database rules.':'Something went wrong: '+((e&&e.message)||e))}
+}
+// Batch several snapshot updates into a single redraw
+function render(){if(rq)return;rq=requestAnimationFrame(()=>{rq=0;draw()})}
 
 if(firebaseConfig.apiKey==='YOUR_API_KEY'){
   $('#app').innerHTML='<h1>🎭 Who Am I?</h1><p class="err">Firebase isn\'t set up yet. Paste your Firebase config into the top of this file (see the setup steps).</p>';
@@ -65,16 +78,21 @@ if(firebaseConfig.apiKey==='YOUR_API_KEY'){
 }
 
 async function enter(create){
-  const name=$('#nm').value.trim().replace(/[^\p{L}\p{N} _-]/gu,'').slice(0,16);
+  const name=draft.nm.trim().replace(/[^\p{L}\p{N} _-]/gu,'').slice(0,16);
   if(!name){err='Enter a username';return render()}
   me={name,id:idOf(name)};
-  code=create?Array.from({length:4},()=>pick('ABCDEFGHJKLMNPQRSTUVWXYZ')).join(''):$('#cd').value.trim().toUpperCase();
   try{
-    if(create&&(await lref().child('host').get()).exists()){return enter(true)}
-    if(create)await lref().update({host:me.id,pool:'games,movies,history,anime,pop,tv,books,sports,lol',maxRounds:5,winScore:3,round:0,status:'lobby'});
-    else if(!(await lref().child('host').get()).exists()){code=null;err='Lobby not found';return render()}
+    if(create){
+      code=newCode();
+      for(let i=0;i<5&&(await lref().child('host').get()).exists();i++)code=newCode();
+      await lref().update({host:me.id,pool:ALL_CATS,maxRounds:5,winScore:3,round:0,status:'lobby',created:TS()});
+    }else{
+      code=draft.cd.trim().toUpperCase();
+      if(code.length!==4){code=null;err='Lobby codes are 4 letters';return render()}
+      if(!(await lref().child('host').get()).exists()){code=null;err='Lobby not found';return render()}
+    }
     await join();err='';
-  }catch(e){code=null;err='Could not connect: '+(e.message||e)}
+  }catch(e){code=null;err='Could not connect: '+((e&&e.message)||e)}
   render();
 }
 async function join(){
@@ -82,111 +100,151 @@ async function join(){
   const pr=lref().child('players/'+me.id);
   if(!(await pr.get()).exists())await pr.set({id:me.id,name:me.name,score:0});
   sset('wai_code',code);sset('wai_name',me.name);
-  offs.forEach(f=>f());
+  stop();
   const r1=lref(),f1=r1.on('value',s=>{
     const v=s.val();
-    if(!v){L=null}else{L={...v,assign:v.assign||{},done:v.done||{}};P=Object.values(v.players||{})}
+    if(!v){L=null;P=[]}else{
+      L={...v,assign:v.assign||{},done:v.done||{}};
+      P=Object.values(v.players||{}).filter(p=>p&&typeof p.id==='string').map(p=>({...p,name:String(p.name||p.id),score:Number(p.score)||0}));
+    }
     if(L&&!P.some(p=>p.id===me.id)){err='You were removed from the lobby';return leave()}
-    render();
+    watchProfiles();render();
   });
-  const r2=rdb.ref('profiles'),f2=r2.on('value',s=>{W=s.val()||{};render()});
+  const r2=rdb.ref('.info/connected'),f2=r2.on('value',s=>{online=s.val()===true;render()});
   offs=[()=>r1.off('value',f1),()=>r2.off('value',f2)];
+  wake();
 }
-function kick(id){if(confirm('Remove this player from the lobby?'))lref().child('players/'+id).remove()}
-function leave(){offs.forEach(f=>f());offs=[];sset('wai_code','');code=null;L=null;P=[];render()}
+// Only listen to lifetime stats for the players in this lobby
+function watchProfiles(){
+  const want=new Set(P.map(p=>p.id));
+  want.forEach(id=>{if(!pw[id]){const r=rdb.ref('profiles/'+id);pw[id]={r,f:r.on('value',s=>{W[id]=s.val()||{};render()})}}});
+  Object.keys(pw).forEach(id=>{if(!want.has(id)){pw[id].r.off('value',pw[id].f);delete pw[id];delete W[id]}});
+}
+function stop(){offs.forEach(f=>f());offs=[];Object.values(pw).forEach(o=>o.r.off('value',o.f));pw={};W={}}
+function leave(){stop();sset('wai_code','');code=null;L=null;P=[];try{wl&&wl.release()}catch(e){}wl=null;render()}
+function kick(id){if(confirm('Remove this player from the lobby?'))return lref().child('players/'+id).remove()}
+// Keep the phone screen on during a game (it would otherwise sleep and drop the connection)
+async function wake(){try{if('wakeLock' in navigator&&code&&document.visibilityState==='visible')wl=await navigator.wakeLock.request('screen')}catch(e){}}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')wake()});
 
 const upd=o=>lref().update(o);
-function stepper(label,key,min,max){
-  return `<div class="row" style="margin-bottom:8px"><span>${label}</span><span class="step"><button class="s" onclick="adj('${key}',-1,${min},${max})">−</button><b>${L[key]}</b><button class="s" onclick="adj('${key}',1,${min},${max})">+</button></span></div>`;
+const RANGE={maxRounds:[1,30],winScore:[1,15]};
+function stepper(label,key){
+  return `<div class="row" style="margin-bottom:8px"><span>${label}</span><span class="step"><button class="s" data-a="adj" data-id="${key}" data-v="-1" aria-label="Decrease ${label}">−</button><b>${L[key]}</b><button class="s" data-a="adj" data-id="${key}" data-v="1" aria-label="Increase ${label}">+</button></span></div>`;
 }
-function adj(k,d,mn,mx){upd({[k]:Math.max(mn,Math.min(mx,L[k]+d))})}
+function adj(k,d){const[mn,mx]=RANGE[k]||[1,30];return upd({[k]:Math.max(mn,Math.min(mx,(Number(L[k])||mn)+d))})}
 const CATS=[['games','🎮 Video games'],['movies','🎬 Movies'],['history','🏛️ History'],['anime','🍥 Anime'],['pop','⭐ Pop culture'],['tv','📺 TV'],['books','📚 Books & fantasy'],['sports','🏅 Athletes'],['lol','⚔️ League of Legends']];
 const LISTS=()=>({games:GAMES,movies:MOVIES,history:HISTORY,anime:ANIME,pop:POP,tv:TV,books:BOOKS,sports:SPORTS,lol:LOL});
 const sel=()=>!L.pool||L.pool==='both'?CATS.map(c=>c[0]):L.pool.split(',').filter(k=>LISTS()[k]);
 function toggleCat(k){
   const cur=sel(),next=cur.includes(k)?cur.filter(x=>x!==k):cur.concat(k);
   if(!next.length)return;
-  upd({pool:CATS.map(c=>c[0]).filter(x=>next.includes(x)).join(',')});
+  return upd({pool:CATS.map(c=>c[0]).filter(x=>next.includes(x)).join(',')});
 }
-const poolSel=()=>`<div class="mu" style="margin-bottom:6px">Categories (tap to turn on/off)</div><div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${CATS.map(c=>`<button class="${sel().includes(c[0])?'':'s'}" style="padding:8px 12px;min-height:40px" onclick="toggleCat('${c[0]}')">${sel().includes(c[0])?'✓ ':''}${c[1]}</button>`).join('')}</div>`;
-const poolName=()=>CATS.filter(c=>sel().includes(c[0])).map(c=>c[1].replace(/^\S+ /,'')).join(', ');
+const poolSel=()=>{const on=sel();return `<div class="mu" style="margin-bottom:6px">Categories (tap to turn on/off)</div><div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${CATS.map(c=>`<button class="${on.includes(c[0])?'':'s'}" style="padding:8px 12px;min-height:40px" data-a="cat" data-v="${c[0]}" aria-pressed="${on.includes(c[0])}">${on.includes(c[0])?'✓ ':''}${c[1]}</button>`).join('')}</div>`};
+const poolName=()=>{const on=sel();return CATS.filter(c=>on.includes(c[0])).map(c=>c[1].replace(/^\S+ /,'')).join(', ')};
 function pool(){const l=LISTS();return [...new Set(sel().flatMap(k=>l[k]))]}
 
-const usedList=()=>Array.isArray(L.used)?L.used:Object.values(L.used||{});
+const usedSet=()=>new Set(Array.isArray(L.used)?L.used:Object.values(L.used||{}));
 async function startRound(re){
   if(re!==true&&L.round>=L.maxRounds)return endRound();
   // "used" only holds characters from rounds actually played, so rerolling an unfinished round doesn't burn them.
-  let used=usedList();
-  const done=re===true?(L.done||{}):{},assign={},cur=Object.values(L.assign||{});
-  const keep=P.filter(p=>done[p.id]&&L.assign[p.id]); // players who already scored keep their character
-  keep.forEach(p=>{assign[p.id]=L.assign[p.id]});
-  used=[...new Set(used.concat(keep.map(p=>assign[p.id])))];
-  const todo=P.filter(p=>!assign[p.id]),all=pool(),skip=new Set(used);
-  let src=all.filter(x=>!skip.has(x)&&!Object.values(assign).includes(x));
-  if(re===true){const fresh=src.filter(x=>!cur.includes(x));if(fresh.length>=todo.length)src=fresh} // don't hand the same ones straight back
-  if(src.length<todo.length){used=keep.map(p=>assign[p.id]);src=all.filter(x=>!used.includes(x))}
+  const done=re===true?L.done:{},assign={},cur=new Set(Object.values(L.assign||{})),used=usedSet();
+  P.filter(p=>done[p.id]&&L.assign[p.id]).forEach(p=>{assign[p.id]=L.assign[p.id];used.add(hash(L.assign[p.id]))}); // scorers keep theirs
+  const todo=P.filter(p=>!assign[p.id]),kept=new Set(Object.values(assign)),all=pool();
+  let src=all.filter(x=>!used.has(hash(x))&&!kept.has(x));
+  if(re===true){const fresh=src.filter(x=>!cur.has(x));if(fresh.length>=todo.length)src=fresh} // don't hand the same ones straight back
+  if(src.length<todo.length){used.clear();kept.forEach(x=>used.add(hash(x)));src=all.filter(x=>!kept.has(x))} // pool exhausted: start over
   todo.forEach(p=>{assign[p.id]=src.splice(Math.floor(Math.random()*src.length),1)[0]});
-  await upd({status:'playing',round:re===true?L.round:L.round+1,assign,done:re===true?L.done||null:null,used});
+  await upd({status:'playing',round:re===true?L.round:L.round+1,assign,done:re===true&&Object.keys(L.done).length?L.done:null,used:[...used]});
 }
 async function award(id){
-  if(L.done[id])return;
-  await upd({['players/'+id+'/score']:inc(1),['done/'+id]:true});
+  if(L.done[id]||busy.has(id))return;
+  busy.add(id);
+  try{await upd({['players/'+id+'/score']:inc(1),['done/'+id]:true})}finally{busy.delete(id)}
 }
-async function endRound(){
-  if(L.status==='over')return;
-  const top=Math.max(0,...P.map(p=>p.score||0));
-  const over=top>=L.winScore||L.round>=L.maxRounds;
-  await upd({status:over?'over':'between',used:[...new Set(usedList().concat(Object.values(L.assign||{})))]});
-  if(over)for(const p of P){
-    const pr=rdb.ref('profiles/'+p.id);
-    await pr.update({id:p.id,games:inc(1),wins:inc((p.score||0)===top&&top>0?1:0)});
-  }
+async function endRound(force){
+  if(L.status==='over'||busy.has('end'))return;
+  busy.add('end');
+  try{
+    const top=Math.max(0,...P.map(p=>p.score)),over=force===true||top>=L.winScore||L.round>=L.maxRounds,b='lobbies/'+code+'/',u={};
+    u[b+'status']=over?'over':'between';
+    u[b+'used']=[...new Set([...usedSet(),...Object.values(L.assign||{}).map(hash)])];
+    if(over)P.forEach(p=>{ // one atomic write: status + everyone's lifetime stats
+      u['profiles/'+p.id+'/id']=p.id;u['profiles/'+p.id+'/games']=inc(1);u['profiles/'+p.id+'/wins']=inc(p.score===top&&top>0?1:0);
+    });
+    await rdb.ref().update(u);
+  }finally{busy.delete('end')}
 }
-async function reset(){
+function reset(){
   const u={status:'lobby',round:0,assign:null,done:null};
   P.forEach(p=>{u['players/'+p.id+'/score']=0});
-  await upd(u);
+  return upd(u);
 }
-function copyLink(){const t=`Join my Who Am I game! Lobby code: ${code}\n${location.href.split('#')[0]}`;navigator.clipboard&&navigator.clipboard.writeText(t).then(()=>alert('Invite copied!')).catch(()=>alert(t))}
+async function copyLink(){
+  const url=location.href.split('#')[0],text=`Join my Who Am I game! Lobby code: ${code}`;
+  try{
+    if(navigator.share){await navigator.share({text,url});return}
+    await navigator.clipboard.writeText(text+'\n'+url);flash('Invite copied!');
+  }catch(e){if(e&&e.name!=='AbortError')flash(text+' '+url)}
+}
 
-function render(){
+// Click handling via data attributes (no inline JS, so player names/ids from the database can't inject code)
+const ACT={create:()=>enter(true),join:()=>enter(false),invite:copyLink,leave,
+  award:id=>award(id),kick:id=>kick(id),start:()=>startRound(),reroll:()=>startRound(true),end:()=>endRound(),
+  endgame:()=>confirm('End the whole game?')&&endRound(true),reset,
+  host:()=>confirm('Take over as host?')&&upd({host:me.id}),
+  cat:(_,v)=>toggleCat(v),adj:(k,v)=>adj(k,Number(v))};
+const HOSTONLY=new Set(['award','kick','start','reroll','end','endgame','reset','cat','adj']);
+document.addEventListener('click',e=>{
+  const b=e.target.closest&&e.target.closest('[data-a]');
+  if(!b||b.disabled)return;
+  const a=b.dataset.a;
+  if(HOSTONLY.has(a)&&!isHost())return;
+  if(ACT[a])run(()=>ACT[a](b.dataset.id,b.dataset.v));
+});
+document.addEventListener('input',e=>{if(e.target&&e.target.id in draft)draft[e.target.id]=e.target.value});
+document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target&&e.target.dataset&&e.target.dataset.enter)run(()=>ACT[e.target.dataset.enter]())});
+
+function draw(){
   const a=$('#app');if(!rdb)return;
+  const banner=(online?'':'<div class="card err">📡 Connection lost — reconnecting…</div>')+(toast?`<div class="card">${esc(toast)}</div>`:'');
   if(!code||!L){
-    a.innerHTML=`<h1>🎭 Who Am I?</h1><p class="mu">Everyone sees your character but you. Ask yes/no questions on voice chat to figure it out!</p>
-    <div class="card"><input id="nm" placeholder="Your username" maxlength="16" value="${esc(sget('wai_name'))}">
-    <button style="width:100%;margin-bottom:12px" onclick="enter(true)">Create lobby</button>
+    a.innerHTML=`<h1>🎭 Who Am I?</h1><p class="mu">Everyone sees your character but you. Ask yes/no questions on voice chat to figure it out!</p>${banner}
+    <div class="card"><input id="nm" placeholder="Your username" maxlength="16" autocomplete="nickname" data-enter="create" value="${esc(draft.nm)}">
+    <button style="width:100%;margin-bottom:12px" data-a="create">Create lobby</button>
     <div class="mu" style="margin-bottom:6px">or join a friend's lobby</div>
-    <input id="cd" placeholder="Lobby code" maxlength="4" style="text-transform:uppercase">
-    <button class="s" style="width:100%" onclick="enter(false)">Join lobby</button></div><div class="err">${esc(err)}</div>`;
+    <input id="cd" placeholder="Lobby code" maxlength="4" autocomplete="off" autocapitalize="characters" data-enter="join" style="text-transform:uppercase" value="${esc(draft.cd)}">
+    <button class="s" style="width:100%" data-a="join">Join lobby</button></div><div class="err">${esc(err)}</div>`;
     return;
   }
-  const h=isHost(),st=L.status,sorted=P.slice().sort((x,y)=>(y.score||0)-(x.score||0));
-  let html=`<div class="row"><div><div class="mu">Lobby code · Round ${L.round}/${L.maxRounds} · First to ${L.winScore}</div><div class="code">${esc(code)}</div></div><div><button class="s" onclick="copyLink()">Invite</button></div></div>`;
+  const h=isHost(),st=L.status,sorted=P.slice().sort((x,y)=>y.score-x.score||x.name.localeCompare(y.name));
+  let html=banner+`<div class="row"><div><div class="mu">Lobby code · Round ${L.round}/${L.maxRounds} · First to ${L.winScore}</div><div class="code">${esc(code)}</div></div><div><button class="s" data-a="invite">Invite</button></div></div>`;
   if(st==='over'){
-    const top=sorted[0]?sorted[0].score||0:0,ws=sorted.filter(p=>(p.score||0)===top).map(p=>esc(p.name)).join(' & ');
-    html+=`<div class="card" style="text-align:center"><div style="font-size:48px">${top>0?'🏆':'🤝'}</div><div class="big">${top>0?ws+(sorted.filter(p=>(p.score||0)===top).length>1?' tie!':' wins!'):'No winner this time'}</div></div>`;
+    const top=sorted[0]?sorted[0].score:0,w=sorted.filter(p=>p.score===top),ws=w.map(p=>esc(p.name)).join(' & ');
+    html+=`<div class="card" style="text-align:center"><div style="font-size:48px">${top>0?'🏆':'🤝'}</div><div class="big">${top>0?ws+(w.length>1?' tie!':' wins!'):'No winner this time'}</div></div>`;
   }
   if(st==='playing'||st==='between'||st==='over'){
     html+=`<h2>${st==='playing'?'Round '+L.round+' · guess who you are':'Round '+L.round+' reveal'}</h2>`;
     P.forEach(p=>{
       const mine=p.id===me.id,late=!L.assign[p.id],show=!late&&(!mine||st!=='playing'),d=L.done[p.id];
       html+=`<div class="card row"><div><div class="mu">${esc(p.name)}${mine?' (you)':''}</div>${late?'<div class="mu">Joins next round</div>':show?`<div class="big">${esc(L.assign[p.id])}</div>`:'<div class="hid">? ? ?</div>'}</div>
-      ${d?'<span style="color:var(--ok);font-weight:700">✓ Guessed</span>':(h&&st==='playing'&&!late?`<button class="ok" onclick="award('${p.id}')">Got it +1</button>`:'')}</div>`;
+      ${d?'<span style="color:var(--ok);font-weight:700">✓ Guessed</span>':(h&&st==='playing'&&!late?`<button class="ok" data-a="award" data-id="${esc(p.id)}">Got it +1</button>`:'')}</div>`;
     });
   }
-  html+=`<h2>Scoreboard</h2><div class="card">`+sorted.map(p=>`<div class="row" style="padding:6px 0"><span>${p.id===L.host?'👑 ':''}${esc(p.name)}${p.id===me.id?' (you)':''} <span class="mu">🏅${(W[p.id]||{}).wins||0} wins</span></span><span class="sc">${p.score||0}${h&&p.id!==me.id?` <button class="s" style="padding:2px 10px;min-height:32px" onclick="kick('${p.id}')">✕</button>`:''}</span></div>`).join('')+`</div>`;
+  html+=`<h2>Scoreboard</h2><div class="card">`+sorted.map(p=>`<div class="row" style="padding:6px 0"><span>${p.id===L.host?'👑 ':''}${esc(p.name)}${p.id===me.id?' (you)':''} <span class="mu">🏅${Number((W[p.id]||{}).wins)||0} wins</span></span><span class="sc">${p.score}${h&&p.id!==me.id?` <button class="s" style="padding:2px 10px;min-height:32px" data-a="kick" data-id="${esc(p.id)}" aria-label="Remove ${esc(p.name)}">✕</button>`:''}</span></div>`).join('')+`</div>`;
   if(h&&(st==='lobby'||st==='between')){
-    html+=`<h2>Game settings</h2><div class="card">${poolSel()}${stepper('Max rounds','maxRounds',1,30)}${stepper('Score to win','winScore',1,15)}</div>`;
+    html+=`<h2>Game settings</h2><div class="card">${poolSel()}${stepper('Max rounds','maxRounds')}${stepper('Score to win','winScore')}</div>`;
   }else if(st==='lobby'||st==='between'){
     html+=`<p class="mu">Categories: ${poolName()} · Waiting for the host…</p>`;
   }
   if(h){
-    if(st==='lobby'||st==='between')html+=`<button style="width:100%" ${P.length<2?'disabled':''} onclick="startRound()">${st==='lobby'?'Start game':'Next round'}</button>${P.length<2?'<p class="mu">Need at least 2 players.</p>':''}`;
-    if(st==='playing')html+=`<h2>Reroll</h2><div class="card">${poolSel()}<button class="s" style="width:100%" onclick="startRound(true)">Reroll characters</button></div><button style="width:100%" onclick="endRound()">End round &amp; reveal</button>`;
-    if(st==='over')html+=`<button style="width:100%" onclick="reset()">Play again</button>`;
-    if(st!=='lobby'&&st!=='over')html+=`<button class="s" style="width:100%;margin-top:8px" onclick="if(confirm('End the whole game?')){L.round=L.maxRounds;endRound()}">End game now</button>`;
-  }else html+=`<button class="s" style="width:100%" onclick="if(confirm('Take over as host?'))upd({host:'${me.id}'})">Take over as host</button>`;
-  html+=`<button class="s" style="width:100%;margin-top:8px" onclick="leave()">Leave lobby</button>`;
+    if(st==='lobby'||st==='between')html+=`<button style="width:100%" ${P.length<2?'disabled':''} data-a="start">${st==='lobby'?'Start game':'Next round'}</button>${P.length<2?'<p class="mu">Need at least 2 players.</p>':''}`;
+    if(st==='playing')html+=`<h2>Reroll</h2><div class="card">${poolSel()}<button class="s" style="width:100%" data-a="reroll">Reroll characters</button></div><button style="width:100%" data-a="end">End round &amp; reveal</button>`;
+    if(st==='over')html+=`<button style="width:100%" data-a="reset">Play again</button>`;
+    if(st!=='lobby'&&st!=='over')html+=`<button class="s" style="width:100%;margin-top:8px" data-a="endgame">End game now</button>`;
+  }else html+=`<button class="s" style="width:100%" data-a="host">Take over as host</button>`;
+  html+=`<button class="s" style="width:100%;margin-top:8px" data-a="leave">Leave lobby</button>`;
   a.innerHTML=html;
 }
 </script></body></html>
