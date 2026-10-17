@@ -53,7 +53,7 @@ const sset=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
 const pick=a=>a[Math.floor(Math.random()*a.length)];
 // Short stable fingerprint of a character name, so the "used" list stays small
 const hash=s=>{let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return (h>>>0).toString(36)};
-let rdb,me=null,code=null,L=null,P=[],W={},offs=[],pw={},err='',online=true,toast='',wl=null,rq=0;
+let lastHtml='',rdb,me=null,code=null,L=null,P=[],W={},offs=[],pw={},err='',online=true,toast='',wl=null,rq=0;
 const busy=new Set(),draft={nm:sget('wai_name'),cd:''};
 const TS=()=>firebase.database.ServerValue.TIMESTAMP;
 const inc=n=>firebase.database.ServerValue.increment(n);
@@ -62,6 +62,7 @@ const isHost=()=>!!(L&&me&&L.host===me.id);
 const ALL_CATS='games,movies,history,anime,pop,tv,books,sports,lol';
 const newCode=()=>Array.from({length:4},()=>pick('ABCDEFGHJKLMNPQRSTUVWXYZ')).join('');
 
+const userErr=m=>Object.assign(new Error(m),{user:true});
 function flash(m){toast=m;render();setTimeout(()=>{if(toast===m){toast='';render()}},4000)}
 async function run(f){
   try{await f()}catch(e){flash(e&&e.code==='PERMISSION_DENIED'?'Blocked by the database rules.':'Something went wrong: '+((e&&e.message)||e))}
@@ -74,7 +75,7 @@ if(firebaseConfig.apiKey==='YOUR_API_KEY'){
 }else{
   firebase.initializeApp(firebaseConfig);rdb=firebase.database();
   const c=sget('wai_code'),n=sget('wai_name');
-  if(c&&n){me={name:n,id:idOf(n)};code=c;join().catch(()=>{code=null}).then(render)}else render();
+  if(c&&n){me={name:n,id:idOf(n)};code=c;join().catch(e=>{code=null;if(e&&e.user)err=e.message}).then(render)}else render();
 }
 
 async function enter(create){
@@ -92,11 +93,12 @@ async function enter(create){
       if(!(await lref().child('host').get()).exists()){code=null;err='Lobby not found';return render()}
     }
     await join();err='';
-  }catch(e){code=null;err='Could not connect: '+((e&&e.message)||e)}
+  }catch(e){code=null;err=e&&e.user?e.message:'Could not connect: '+((e&&e.message)||e)}
   render();
 }
 async function join(){
   if(!(await lref().child('host').get()).exists())throw new Error('Lobby no longer exists');
+  if((await lref().child('kicked/'+me.id).get()).exists())throw userErr('The host removed you from that lobby.');
   const pr=lref().child('players/'+me.id);
   if(!(await pr.get()).exists())await pr.set({id:me.id,name:me.name,score:0});
   sset('wai_code',code);sset('wai_name',me.name);
@@ -104,10 +106,10 @@ async function join(){
   const r1=lref(),f1=r1.on('value',s=>{
     const v=s.val();
     if(!v){L=null;P=[]}else{
-      L={...v,assign:v.assign||{},done:v.done||{}};
+      L={...v,assign:v.assign||{},done:v.done||{},kicked:v.kicked||{}};
       P=Object.values(v.players||{}).filter(p=>p&&typeof p.id==='string').map(p=>({...p,name:String(p.name||p.id),score:Number(p.score)||0}));
     }
-    if(L&&!P.some(p=>p.id===me.id)){err='You were removed from the lobby';return leave()}
+    if(L&&!P.some(p=>p.id===me.id)){err=L.kicked[me.id]?'The host removed you from that lobby.':'You are no longer in that lobby.';return leave()}
     watchProfiles();render();
   });
   const r2=rdb.ref('.info/connected'),f2=r2.on('value',s=>{online=s.val()===true;render()});
@@ -122,7 +124,13 @@ function watchProfiles(){
 }
 function stop(){offs.forEach(f=>f());offs=[];Object.values(pw).forEach(o=>o.r.off('value',o.f));pw={};W={}}
 function leave(){stop();sset('wai_code','');code=null;L=null;P=[];try{wl&&wl.release()}catch(e){}wl=null;render()}
-function kick(id){if(confirm('Remove this player from the lobby?'))return lref().child('players/'+id).remove()}
+function kick(id){
+  const p=P.find(x=>x.id===id);if(!p||id===me.id)return;
+  if(!confirm('Remove '+p.name+' from the lobby? They won\'t be able to rejoin unless you allow it.'))return;
+  // one atomic write: remove the player, their character and mark, and block them from rejoining
+  return upd({['players/'+id]:null,['assign/'+id]:null,['done/'+id]:null,['kicked/'+id]:p.name});
+}
+function unkick(id){return lref().child('kicked/'+id).remove()}
 // Keep the phone screen on during a game (it would otherwise sleep and drop the connection)
 async function wake(){try{if('wakeLock' in navigator&&code&&document.visibilityState==='visible')wl=await navigator.wakeLock.request('screen')}catch(e){}}
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')wake()});
@@ -134,7 +142,8 @@ function stepper(label,key){
 }
 function adj(k,d){const[mn,mx]=RANGE[k]||[1,30];return upd({[k]:Math.max(mn,Math.min(mx,(Number(L[k])||mn)+d))})}
 const CATS=[['games','🎮 Video games'],['movies','🎬 Movies'],['history','🏛️ History'],['anime','🍥 Anime'],['pop','⭐ Pop culture'],['tv','📺 TV'],['books','📚 Books & fantasy'],['sports','🏅 Athletes'],['lol','⚔️ League of Legends']];
-const LISTS=()=>({games:GAMES,movies:MOVIES,history:HISTORY,anime:ANIME,pop:POP,tv:TV,books:BOOKS,sports:SPORTS,lol:LOL});
+const LISTMAP={games:GAMES,movies:MOVIES,history:HISTORY,anime:ANIME,pop:POP,tv:TV,books:BOOKS,sports:SPORTS,lol:LOL};
+const LISTS=()=>LISTMAP;
 const sel=()=>!L.pool||L.pool==='both'?CATS.map(c=>c[0]):L.pool.split(',').filter(k=>LISTS()[k]);
 function toggleCat(k){
   const cur=sel(),next=cur.includes(k)?cur.filter(x=>x!==k):cur.concat(k);
@@ -191,11 +200,11 @@ async function copyLink(){
 
 // Click handling via data attributes (no inline JS, so player names/ids from the database can't inject code)
 const ACT={create:()=>enter(true),join:()=>enter(false),invite:copyLink,leave,
-  award:id=>award(id),kick:id=>kick(id),start:()=>startRound(),reroll:()=>startRound(true),end:()=>endRound(),
+  award:id=>award(id),kick:id=>kick(id),unkick:id=>unkick(id),start:()=>startRound(),reroll:()=>startRound(true),end:()=>endRound(),
   endgame:()=>confirm('End the whole game?')&&endRound(true),reset,
   host:()=>confirm('Take over as host?')&&upd({host:me.id}),
   cat:(_,v)=>toggleCat(v),adj:(k,v)=>adj(k,Number(v))};
-const HOSTONLY=new Set(['award','kick','start','reroll','end','endgame','reset','cat','adj']);
+const HOSTONLY=new Set(['award','kick','unkick','start','reroll','end','endgame','reset','cat','adj']);
 document.addEventListener('click',e=>{
   const b=e.target.closest&&e.target.closest('[data-a]');
   if(!b||b.disabled)return;
@@ -208,14 +217,15 @@ document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target&&e.target.d
 
 function draw(){
   const a=$('#app');if(!rdb)return;
-  const banner=(online?'':'<div class="card err">📡 Connection lost — reconnecting…</div>')+(toast?`<div class="card">${esc(toast)}</div>`:'');
+  const put=h=>{if(h===lastHtml)return;lastHtml=h;const y=typeof window!=='undefined'?window.scrollY:0;a.innerHTML=h;if(y&&typeof window!=='undefined')window.scrollTo(0,y)};
+  const banner=(online?'':'<div class="card err">📡 Connection lost — reconnecting…</div>')+(toast?`<div class="card" role="status">${esc(toast)}</div>`:'');
   if(!code||!L){
-    a.innerHTML=`<h1>🎭 Who Am I?</h1><p class="mu">Everyone sees your character but you. Ask yes/no questions on voice chat to figure it out!</p>${banner}
+    put(`<h1>🎭 Who Am I?</h1><p class="mu">Everyone sees your character but you. Ask yes/no questions on voice chat to figure it out!</p>${banner}
     <div class="card"><input id="nm" placeholder="Your username" maxlength="16" autocomplete="nickname" data-enter="create" value="${esc(draft.nm)}">
     <button style="width:100%;margin-bottom:12px" data-a="create">Create lobby</button>
     <div class="mu" style="margin-bottom:6px">or join a friend's lobby</div>
     <input id="cd" placeholder="Lobby code" maxlength="4" autocomplete="off" autocapitalize="characters" data-enter="join" style="text-transform:uppercase" value="${esc(draft.cd)}">
-    <button class="s" style="width:100%" data-a="join">Join lobby</button></div><div class="err">${esc(err)}</div>`;
+    <button class="s" style="width:100%" data-a="join">Join lobby</button></div><div class="err">${esc(err)}</div>`);
     return;
   }
   const h=isHost(),st=L.status,sorted=P.slice().sort((x,y)=>y.score-x.score||x.name.localeCompare(y.name));
@@ -233,6 +243,8 @@ function draw(){
     });
   }
   html+=`<h2>Scoreboard</h2><div class="card">`+sorted.map(p=>`<div class="row" style="padding:6px 0"><span>${p.id===L.host?'👑 ':''}${esc(p.name)}${p.id===me.id?' (you)':''} <span class="mu">🏅${Number((W[p.id]||{}).wins)||0} wins</span></span><span class="sc">${p.score}${h&&p.id!==me.id?` <button class="s" style="padding:2px 10px;min-height:32px" data-a="kick" data-id="${esc(p.id)}" aria-label="Remove ${esc(p.name)}">✕</button>`:''}</span></div>`).join('')+`</div>`;
+  const kk=Object.entries(L.kicked);
+  if(h&&kk.length)html+=`<h2>Removed players</h2><div class="card">`+kk.map(([id,n])=>`<div class="row" style="padding:4px 0"><span>${esc(n)}</span><button class="s" style="padding:4px 12px;min-height:36px" data-a="unkick" data-id="${esc(id)}">Allow back</button></div>`).join('')+`</div>`;
   if(h&&(st==='lobby'||st==='between')){
     html+=`<h2>Game settings</h2><div class="card">${poolSel()}${stepper('Max rounds','maxRounds')}${stepper('Score to win','winScore')}</div>`;
   }else if(st==='lobby'||st==='between'){
@@ -245,6 +257,6 @@ function draw(){
     if(st!=='lobby'&&st!=='over')html+=`<button class="s" style="width:100%;margin-top:8px" data-a="endgame">End game now</button>`;
   }else html+=`<button class="s" style="width:100%" data-a="host">Take over as host</button>`;
   html+=`<button class="s" style="width:100%;margin-top:8px" data-a="leave">Leave lobby</button>`;
-  a.innerHTML=html;
+  put(html);
 }
 </script></body></html>
